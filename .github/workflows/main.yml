@@ -1,0 +1,75 @@
+name: Update Thumbprints
+
+on:
+  schedule:
+    - cron: '0 */8 * * *' # Runs every 8 hours
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  update-thumbprint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Install OpenSSL
+        run: sudo apt-get update && sudo apt-get install -y openssl
+
+      - name: Fetch Com
+        env:
+          com443: ${{ secrets.com443 }}
+          com: ${{ secrets.com }}
+          compem: ${{ secrets.compem }}
+        run: |
+          openssl s_client -connect ${com443} -servername ${com} </dev/null | openssl x509 -outform PEM > ${compem}
+
+      - name: Extract Com
+        id: extract_com
+        env:
+          compem: ${{ secrets.compem }}
+        run: |
+          THUMBPRINT=$(openssl x509 -noout -fingerprint -sha1 -inform pem -in ${compem} | cut -d '=' -f2)
+          echo "$THUMBPRINT" > com
+          echo "THUMBPRINT=$THUMBPRINT" >> $GITHUB_ENV
+
+      - name: Fetch App Com
+        env:
+          appcom443: ${{ secrets.appcom443 }}
+          appcom: ${{ secrets.appcom }}
+          appcompem: ${{ secrets.appcompem }}
+        run: |
+          openssl s_client -connect ${appcom443} -servername ${appcom} </dev/null | openssl x509 -outform PEM > ${appcompem}
+
+      - name: Extract App Com
+        id: extract_app_com
+        env:
+          appcompem: ${{ secrets.appcompem }}
+        run: |
+          THUMBPRINT=$(openssl x509 -noout -fingerprint -sha1 -inform pem -in ${appcompem} | cut -d '=' -f2)
+          echo "$THUMBPRINT" > app-com
+          echo "THUMBPRINT=$THUMBPRINT" >> $GITHUB_ENV
+
+      - name: Commit and Push Changes
+        id: update_both
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git add com
+          git add app-com
+          git commit -m "update: thumbprint" || echo "No changes to commit"
+          git push
+
+      - name: Orphan
+        if: always()
+        env:
+          DATE_TIME: ${{ steps.update_both.outputs.DATE_TIME }}
+        run: |
+          DATE_TIME=$(date +"%Y-%m-%d %H:%M:%S")
+          git checkout --orphan orphan_data
+          git add com
+          git add app-com
+          git commit -am "update: ${DATE_TIME}"
+          git branch -D main
+          git branch -m main
+          git push -f origin main
